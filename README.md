@@ -1,3 +1,5 @@
+Claude generated description and instructions below
+
 # A09 Studio — setup guide
 
 This gives you a SwiftUI Mac app that (1) edits and assembles 6809 code via
@@ -7,10 +9,6 @@ subprocesses (`Process`), not linked in — that keeps the original,
 proven `a09.c` logic completely untouched aside from the one bug fix, and
 avoids reimplementing (or GPL-encumbering the app with) the TL866's
 undocumented USB protocol.
-
-I couldn't build/run this from here (no Xcode on this machine), so build
-it step by step and tell me where anything doesn't match what you see —
-happy to adjust.
 
 ## What's fixed in a09.c
 
