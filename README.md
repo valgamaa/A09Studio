@@ -117,3 +117,13 @@ guessing at what might be different in your setup.
 ## Disk and file tools
 
 Disk Builder, DSK Browser and Disk Image (send to CF card) are documented in [docs/DiskTools.md](docs/DiskTools.md) ([PDF](docs/DiskTools.pdf)).
+
+## Licence
+
+A09 Studio's own code and documentation are released under the [MIT licence](LICENSE).
+
+The `a09Tool/` folder contains the a09 6809 assembler (© L.C. Benschop, parts © H. Seib), which is
+distributed under the **GNU General Public License version 2** — see [a09Tool/COPYING](a09Tool/COPYING).
+A09 Studio runs it as a separate program. The TL866 programmer support runs the separate `minipro` tool in the same way.
+
+This repository contains no FLEX or TSC software. FLEX and its programs belong to their respective owners.
