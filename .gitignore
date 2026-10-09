@@ -8,3 +8,9 @@ xcuserdata/
 # Swift Package Manager (if ever used)
 .build/
 .swiftpm/
+
+# Local backups
+.backup_*/
+*.bak
+*.bak[0-9]
+*.pre_*

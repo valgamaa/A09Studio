@@ -106,18 +106,17 @@ struct TerminalView: View {
                 .help("Load a .s19/.s09/.srec/.mot file to Download instead of the last build -- e.g. a pre-built image you don't have the source for")
 
                 if let loadedFile {
-                    Text(loadedFile.name)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("Loaded: \(loadedFile.name)")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.orange)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 140)
+                        .frame(maxWidth: 220)
                     Button {
                         self.loadedFile = nil
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Label("Clear", systemImage: "xmark.circle.fill")
                     }
-                    .buttonStyle(.plain)
                     .help("Clear the loaded file -- Download will use the last build again")
                 }
             }
@@ -277,6 +276,25 @@ struct TerminalView: View {
     /// (Settings > Terminal > S-Record Download), it's sent first as its
     /// own line -- e.g. whatever command puts your monitor into load mode
     /// -- with the same inter-line delay before the S-record stream starts.
+    /// Gap between individual characters during an S-record download.
+    /// The monitor reads S-records one character at a time through SWI
+    /// calls, which at a 1 MHz bus can't keep up with characters arriving
+    /// back-to-back at 38.4k (the 68681 FIFO is only 4 bytes deep). Lower
+    /// this to find the threshold once downloads work; 0 disables pacing.
+    private var downloadCharGapNs: UInt64 {
+        UInt64(max(0, AppSettings.shared.serialDownloadCharDelayMs) * 1_000_000)
+    }
+
+    /// Sends data one byte at a time with downloadCharGapNs between bytes.
+    private func sendPaced(_ data: Data) async {
+        for byte in data {
+            port.sendRaw(Data([byte]))
+            if downloadCharGapNs > 0 {
+                try? await Task.sleep(nanoseconds: downloadCharGapNs)
+            }
+        }
+    }
+
     private func downloadSRecord() async {
         guard let effectiveSRecord, port.isConnected else { return }
         isDownloading = true
@@ -298,7 +316,7 @@ struct TerminalView: View {
         if !prefix.isEmpty {
             var prefixData = Data(prefix.utf8)
             prefixData.append(contentsOf: AppSettings.shared.serialLineEnding.bytes)
-            port.sendRaw(prefixData)
+            await sendPaced(prefixData)
             if delayNanoseconds > 0 {
                 try? await Task.sleep(nanoseconds: delayNanoseconds)
             }
@@ -307,7 +325,7 @@ struct TerminalView: View {
         for (index, line) in lines.enumerated() {
             var data = Data(line.utf8)
             data.append(contentsOf: AppSettings.shared.serialLineEnding.bytes)
-            port.sendRaw(data)
+            await sendPaced(data)
             downloadProgress = Double(index + 1) / Double(lines.count)
             if delayNanoseconds > 0 {
                 try? await Task.sleep(nanoseconds: delayNanoseconds)

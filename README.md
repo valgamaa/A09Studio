@@ -113,3 +113,7 @@ Erase. Write/Verify default to whatever you last successfully assembled;
 Let me know how far you get through the steps above and what Xcode shows
 at each point — easiest to fix things one step at a time rather than
 guessing at what might be different in your setup.
+
+## Disk and file tools
+
+Disk Builder, DSK Browser and Disk Image (send to CF card) are documented in [docs/DiskTools.md](docs/DiskTools.md) ([PDF](docs/DiskTools.pdf)).

@@ -26,6 +26,9 @@
 		A0950000000000000000003D /* HexViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0950000000000000000003E /* HexViewerView.swift */; };
 		A0950000000000000000003F /* FloatingPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A09500000000000000000040 /* FloatingPanel.swift */; };
 		A09500000000000000000041 /* SrecordRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A09500000000000000000042 /* SrecordRunner.swift */; };
+		A09500000000000000000044 /* FlexDisk.swift in Sources */ = {isa = PBXBuildFile; fileRef = A09500000000000000000043 /* FlexDisk.swift */; };
+		A09500000000000000000046 /* DiskBuilderPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A09500000000000000000045 /* DiskBuilderPanel.swift */; };
+		A09500000000000000000048 /* DiskBrowserPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A09500000000000000000047 /* DiskBrowserPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +78,9 @@
 		A0950000000000000000003E /* HexViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HexViewerView.swift; sourceTree = "<group>"; };
 		A09500000000000000000040 /* FloatingPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanel.swift; sourceTree = "<group>"; };
 		A09500000000000000000042 /* SrecordRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SrecordRunner.swift; sourceTree = "<group>"; };
+		A09500000000000000000043 /* FlexDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlexDisk.swift; sourceTree = "<group>"; };
+		A09500000000000000000045 /* DiskBuilderPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskBuilderPanel.swift; sourceTree = "<group>"; };
+		A09500000000000000000047 /* DiskBrowserPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskBrowserPanel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -125,6 +131,9 @@
 				A0950000000000000000003E /* HexViewerView.swift */,
 				A09500000000000000000040 /* FloatingPanel.swift */,
 				A09500000000000000000042 /* SrecordRunner.swift */,
+				A09500000000000000000043 /* FlexDisk.swift */,
+				A09500000000000000000045 /* DiskBuilderPanel.swift */,
+				A09500000000000000000047 /* DiskBrowserPanel.swift */,
 			);
 			path = A09Studio;
 			sourceTree = "<group>";
@@ -261,6 +270,9 @@
 				A0950000000000000000003D /* HexViewerView.swift in Sources */,
 				A0950000000000000000003F /* FloatingPanel.swift in Sources */,
 				A09500000000000000000041 /* SrecordRunner.swift in Sources */,
+				A09500000000000000000044 /* FlexDisk.swift in Sources */,
+				A09500000000000000000046 /* DiskBuilderPanel.swift in Sources */,
+				A09500000000000000000048 /* DiskBrowserPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -367,6 +379,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 23NWPPHXZ9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -390,6 +403,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 23NWPPHXZ9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -409,6 +423,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 			};
 			name = Debug;
 		};
@@ -416,6 +431,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 			};
 			name = Release;
 		};
@@ -450,7 +466,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = A09500000000000000000001 /* Project object */;
 }

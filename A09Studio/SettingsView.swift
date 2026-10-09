@@ -126,6 +126,10 @@ struct SettingsView: View {
                 Text("Paces the S-record download (and the gap after the prefix) so a monitor with no flow control doesn't drop bytes. Increase if a download fails partway through; 0 if your monitor handles full speed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Stepper("Inter-character delay: \(String(format: "%.1f", settings.serialDownloadCharDelayMs)) ms", value: $settings.serialDownloadCharDelayMs, in: 0...100, step: 0.5)
+                Text("Gap between each character sent during Download. Set it to suit the target's CPU clock: lower it until a download fails, then back off a little. 0 sends at full speed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } header: {
                 Text("S-Record Download")
             }

@@ -34,6 +34,9 @@ import UniformTypeIdentifiers
 /// host to have seen it anyway, it only needs well-formed packets.
 struct DiskImagePanel: View {
     @ObservedObject var port: SerialPortManager
+    /// Image to load as soon as the panel appears (set by the Disk Builder's
+    /// "Send to CF…"); nil leaves the panel empty as before.
+    var preselectedURL: URL? = nil
 
     @State private var imageURL: URL?
     @State private var imageData: Data?
@@ -181,6 +184,9 @@ struct DiskImagePanel: View {
             }
         }
         .padding()
+        .onAppear {
+            if let url = preselectedURL, imageURL == nil { loadImage(url) }
+        }
     }
 
     /// How a transferred image's total sector count relates to its
@@ -230,6 +236,10 @@ struct DiskImagePanel: View {
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.data]
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadImage(url)
+    }
+
+    private func loadImage(_ url: URL) {
         do {
             let data = try Data(contentsOf: url)
             imageURL = url

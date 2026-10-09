@@ -8,6 +8,11 @@ struct ContentView: View {
     @State private var lastResult: AssemblerResult?
     @State private var selectedOutputTab: OutputTab = .listing
     @State private var showDiskImage = false
+    @State private var showDiskBuilder = false
+    @State private var showDiskBrowser = false
+    // Image most recently saved by the Disk Builder, handed to the Disk
+    // Image panel when "Send to CF…" is pressed.
+    @State private var builtDiskURL: URL?
     // Kept alive here (not recreated per click) so re-clicking "Programmer…"
     // brings the same movable window back to front instead of opening a
     // second one -- see FloatingPanel.
@@ -54,8 +59,27 @@ struct ContentView: View {
         }
         .navigationTitle(document.sourceFileURL?.lastPathComponent ?? "Untitled.asm")
         .sheet(isPresented: $showDiskImage) {
-            DiskImagePanel(port: port)
+            DiskImagePanel(port: port, preselectedURL: builtDiskURL)
                 .frame(width: 560, height: 560)
+        }
+        .sheet(isPresented: $showDiskBrowser) {
+            DiskBrowserPanel(onSendToCF: { url in
+                builtDiskURL = url
+                showDiskBrowser = false
+                DispatchQueue.main.async { showDiskImage = true }
+            })
+            .frame(width: 1700, height: 920)
+        }
+        .sheet(isPresented: $showDiskBuilder) {
+            DiskBuilderPanel(
+                assembledSRecord: lastResult?.sRecord,
+                assembledName: document.sourceFileURL?.deletingPathExtension().lastPathComponent,
+                onSendToCF: { url in
+                    builtDiskURL = url
+                    showDiskBuilder = false
+                    DispatchQueue.main.async { showDiskImage = true }
+                })
+                .frame(width: 820, height: 700)
         }
     }
 
@@ -100,6 +124,18 @@ struct ContentView: View {
                 showDiskImage = true
             } label: {
                 Label("Disk Image…", systemImage: "opticaldiscdrive")
+            }
+
+            Button {
+                showDiskBuilder = true
+            } label: {
+                Label("Disk Builder…", systemImage: "externaldrive.badge.plus")
+            }
+
+            Button {
+                showDiskBrowser = true
+            } label: {
+                Label("DSK Browser…", systemImage: "rectangle.split.3x1")
             }
 
             if let result = lastResult {

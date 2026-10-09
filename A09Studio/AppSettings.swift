@@ -20,6 +20,7 @@ final class AppSettings: ObservableObject {
         static let serialLineEnding = "serialLineEnding"
         static let serialLocalEcho = "serialLocalEcho"
         static let serialDownloadLineDelayMs = "serialDownloadLineDelayMs"
+        static let serialDownloadCharDelayMs = "serialDownloadCharDelayMs"
         static let serialDownloadPrefix = "serialDownloadPrefix"
     }
 
@@ -123,6 +124,14 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(serialDownloadLineDelayMs, forKey: Key.serialDownloadLineDelayMs) }
     }
 
+    /// Gap between individual characters during a download, in milliseconds.
+    /// Lower it until downloads start failing, then back off -- the right
+    /// value depends on the target's CPU clock (the monitor reads S-records
+    /// character by character through SWI calls). 0 sends at full speed.
+    @Published var serialDownloadCharDelayMs: Double {
+        didSet { UserDefaults.standard.set(serialDownloadCharDelayMs, forKey: Key.serialDownloadCharDelayMs) }
+    }
+
     /// Text sent (as a line, with the configured line ending) immediately
     /// before the S-record stream on Download -- e.g. whatever command your
     /// monitor ROM needs to put it into "load" mode first. Empty by default,
@@ -148,6 +157,7 @@ final class AppSettings: ObservableObject {
         let storedDelay = d.object(forKey: Key.serialDownloadLineDelayMs) as? Int
         serialDownloadLineDelayMs = storedDelay ?? 10
         serialDownloadPrefix = d.string(forKey: Key.serialDownloadPrefix) ?? ""
+        serialDownloadCharDelayMs = d.object(forKey: Key.serialDownloadCharDelayMs) as? Double ?? 50
     }
 
     /// Splits the free-text extra-arguments field into an argv-style array.
