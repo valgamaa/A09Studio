@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -68,7 +69,8 @@ struct ContentView: View {
                 showDiskBrowser = false
                 DispatchQueue.main.async { showDiskImage = true }
             })
-            .frame(width: 1700, height: 920)
+            .frame(width: min(1700, (NSScreen.main?.visibleFrame.width ?? 1500) - 60),
+                   height: min(920, (NSScreen.main?.visibleFrame.height ?? 900) - 120))
         }
         .sheet(isPresented: $showDiskBuilder) {
             DiskBuilderPanel(

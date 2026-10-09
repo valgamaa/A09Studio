@@ -2,6 +2,45 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
+/// Search-box matcher. Plain text matches anywhere (substring); if the text
+/// contains `*` (any run of characters) or `?` (any one character) it is a
+/// wildcard pattern that must match the whole name, e.g. `*.CMD`, `XB?.*`.
+struct SearchMatcher {
+    let query: String          // upper-cased, trimmed
+    private let pattern: [Character]
+    let isWildcard: Bool
+
+    init(_ text: String) {
+        query = text.trimmingCharacters(in: .whitespaces).uppercased()
+        pattern = Array(query)
+        isWildcard = query.contains("*") || query.contains("?")
+    }
+
+    var isEmpty: Bool { query.isEmpty }
+
+    /// `text` must already be upper-case.
+    func matches(_ text: String) -> Bool {
+        if query.isEmpty { return true }
+        if !isWildcard { return text.contains(query) }
+        let t = Array(text)
+        var pi = 0, ti = 0, star = -1, mark = 0
+        while ti < t.count {
+            if pi < pattern.count && (pattern[pi] == "?" || pattern[pi] == t[ti]) {
+                pi += 1; ti += 1
+            } else if pi < pattern.count && pattern[pi] == "*" {
+                star = pi; mark = ti; pi += 1
+            } else if star >= 0 {
+                pi = star + 1; mark += 1; ti = mark
+            } else {
+                return false
+            }
+        }
+        while pi < pattern.count && pattern[pi] == "*" { pi += 1 }
+        return pi == pattern.count
+    }
+}
+
+
 // MARK: - Background loading (no SwiftUI, no actor isolation)
 
 /// What the left panel remembers about each image in the chosen folder, so
@@ -69,7 +108,7 @@ enum DiskBrowserLoader {
         do {
             let data = try Data(contentsOf: url)
             let image = try FlexImage(data: data, lenient: true)
-            let report = FlexVerifier.verify(image)
+            let report = FlexVerifier.verify(image, forBrowsing: true)
             load.problems = report.errors
             for e in FlexDirectory.entries(in: image) {
                 let id = "\(e.dirSector.track)-\(e.dirSector.sector)-\(e.slot)"
@@ -85,7 +124,8 @@ enum DiskBrowserLoader {
                 }
             }
             let g = image.geometry
-            load.summary = "\(g.tracks) tracks × \(g.spt) sectors, volume \(image.label.isEmpty ? "(none)" : image.label), \(load.rows.count) file(s), \(image.freeCount) free sectors"
+            let firstTrack = image.track0Sectors < g.spt ? " (track 0: \(image.track0Sectors))" : ""
+            load.summary = "\(g.tracks) tracks × \(g.spt) sectors\(firstTrack), volume \(image.label.isEmpty ? "(none)" : image.label), \(load.rows.count) file(s), \(image.freeCount) free sectors"
         } catch {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             load.error = "\(error.localizedDescription) (file is \(size) bytes)"
@@ -119,6 +159,8 @@ struct DiskBrowserPanel: View {
     @State private var hideUnreadable = true
     @State private var filterFiles = true
     @State private var selectedImage: URL?
+    private enum ListFocus { case images, files }
+    @FocusState private var focusedList: ListFocus?
 
     // Middle panel
     @State private var loadTask: Task<Void, Never>?
@@ -171,20 +213,22 @@ struct DiskBrowserPanel: View {
     // MARK: Derived
 
     private var filteredImages: [URL] {
-        let q = search.trimmingCharacters(in: .whitespaces).uppercased()
+        let m = SearchMatcher(search)
         let base = hideUnreadable ? imageURLs.filter { index[$0]?.error == nil } : imageURLs
-        if q.isEmpty { return base }
+        if m.isEmpty { return base }
         return base.filter { url in
-            if relativePath(url).uppercased().contains(q) { return true }
-            return index[url]?.names.contains(where: { $0.contains(q) }) ?? false
+            if m.isWildcard {
+                if m.matches(url.lastPathComponent.uppercased()) { return true }
+            } else if m.matches(relativePath(url).uppercased()) { return true }
+            return index[url]?.names.contains(where: { m.matches($0) }) ?? false
         }
     }
 
     /// Files shown in the middle panel: optionally narrowed by the search box.
     private var visibleRows: [BrowserRow] {
-        let q = search.trimmingCharacters(in: .whitespaces).uppercased()
-        if !filterFiles || q.isEmpty { return rows }
-        return rows.filter { $0.entry.fullName.uppercased().contains(q) }
+        let m = SearchMatcher(search)
+        if !filterFiles || m.isEmpty { return rows }
+        return rows.filter { m.matches($0.entry.fullName.uppercased()) }
     }
 
     private var unreadableCount: Int { index.values.filter { $0.error != nil }.count }
@@ -252,10 +296,10 @@ struct DiskBrowserPanel: View {
             }
 
             HStack(alignment: .top, spacing: 8) {
-                leftPanel.frame(width: 360)
-                middlePanel.frame(minWidth: 720, maxWidth: .infinity)
-                addColumn.frame(width: 100)
-                rightPanel.frame(minWidth: 540, maxWidth: .infinity)
+                leftPanel.frame(minWidth: 220, idealWidth: 300, maxWidth: 340)
+                middlePanel.frame(minWidth: 610, maxWidth: .infinity)
+                addColumn.frame(width: 90)
+                rightPanel.frame(minWidth: 420, maxWidth: .infinity)
             }
             .frame(maxHeight: .infinity)
 
@@ -284,7 +328,10 @@ struct DiskBrowserPanel: View {
                 startScan(URL(fileURLWithPath: saved, isDirectory: true))
             }
         }
-        .onChange(of: selectedImage) { url in openImage(url) }
+        .onChange(of: selectedImage) { url in
+            openImage(url)
+            keepImageListFocus()
+        }
     }
 
     // MARK: Left panel – disk images
@@ -296,7 +343,7 @@ struct DiskBrowserPanel: View {
                 Spacer()
                 Text(scanProgress).font(.body).foregroundStyle(.secondary)
             }
-            TextField("Search disks or file names", text: $search)
+            TextField("Search disks or files (wildcards * ? allowed)", text: $search)
                 .textFieldStyle(.roundedBorder)
             Toggle("Also filter the file list", isOn: $filterFiles)
                 .font(.body)
@@ -312,6 +359,7 @@ struct DiskBrowserPanel: View {
                         imageRow(url).tag(url)
                     }
                 }
+                .focused($focusedList, equals: .images)
                 Text("\(filteredImages.count) of \(imageURLs.count) disk(s)")
                     .font(.body).foregroundStyle(.secondary)
                 if unreadableCount > 0 {
@@ -324,8 +372,8 @@ struct DiskBrowserPanel: View {
 
     private func imageRow(_ url: URL) -> some View {
         let info = index[url]
-        let q = search.trimmingCharacters(in: .whitespaces).uppercased()
-        let hits: [String] = q.isEmpty ? [] : (info?.names.filter { $0.contains(q) } ?? [])
+        let m = SearchMatcher(search)
+        let hits: [String] = m.isEmpty ? [] : (info?.names.filter { m.matches($0) } ?? [])
         return VStack(alignment: .leading, spacing: 1) {
             Text(url.lastPathComponent)
                 .font(.system(.title2, design: .monospaced))
@@ -370,12 +418,12 @@ struct DiskBrowserPanel: View {
                 }
                 HStack(spacing: 6) {
                     Text("").frame(width: 20)
-                    Text("File").frame(width: 200, alignment: .leading)
-                    Text("Type").frame(width: 82, alignment: .leading)
-                    Text("Sect").frame(width: 62, alignment: .trailing)
-                    Text("Date").frame(width: 105, alignment: .leading)
-                    Text("Attr").frame(width: 58, alignment: .leading)
-                    Text("CRC32").frame(width: 125, alignment: .leading)
+                    Text("File").frame(width: 150, alignment: .leading)
+                    Text("Type").frame(width: 70, alignment: .leading)
+                    Text("Sect").frame(width: 52, alignment: .trailing)
+                    Text("Date").frame(width: 100, alignment: .leading)
+                    Text("Attr").frame(width: 52, alignment: .leading)
+                    Text("CRC32").frame(width: 110, alignment: .leading)
                 }
                 .font(.body).foregroundStyle(.secondary)
 
@@ -388,6 +436,7 @@ struct DiskBrowserPanel: View {
                             }
                     }
                 }
+                .focused($focusedList, equals: .files)
                 if visibleRows.count != rows.count {
                     Text("\(visibleRows.count) of \(rows.count) file(s) shown")
                         .font(.body).foregroundStyle(.secondary)
@@ -414,12 +463,12 @@ struct DiskBrowserPanel: View {
             .frame(width: 16)
             Text(r.entry.fullName)
                 .font(.system(.title2, design: .monospaced))
-                .frame(width: 200, alignment: .leading)
-            Text(r.info.kind.rawValue).frame(width: 82, alignment: .leading)
-            Text("\(r.entry.sectorCount)").frame(width: 62, alignment: .trailing)
-            Text(dateText(r.entry.date)).frame(width: 105, alignment: .leading)
-            Text(attrText(r.entry.attributes)).frame(width: 58, alignment: .leading)
-            Text(r.crc).font(.system(.title3, design: .monospaced)).frame(width: 125, alignment: .leading)
+                .frame(width: 150, alignment: .leading)
+            Text(r.info.kind.rawValue).frame(width: 70, alignment: .leading)
+            Text("\(r.entry.sectorCount)").frame(width: 52, alignment: .trailing)
+            Text(dateText(r.entry.date)).frame(width: 100, alignment: .leading)
+            Text(attrText(r.entry.attributes)).frame(width: 52, alignment: .leading)
+            Text(r.crc).font(.system(.title3, design: .monospaced)).frame(width: 110, alignment: .leading)
         }
         .font(.title3)
     }
@@ -523,19 +572,19 @@ struct DiskBrowserPanel: View {
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 TextField("", text: item.name)
-                    .textFieldStyle(.roundedBorder).frame(width: 150)
+                    .textFieldStyle(.roundedBorder).frame(width: 130)
                     .onChange(of: item.wrappedValue.name) { new in
                         let up = new.uppercased()
                         if up != new { item.wrappedValue.name = up }
                     }
                 TextField("", text: item.ext)
-                    .textFieldStyle(.roundedBorder).frame(width: 70)
+                    .textFieldStyle(.roundedBorder).frame(width: 60)
                     .onChange(of: item.wrappedValue.ext) { new in
                         let up = new.uppercased()
                         if up != new { item.wrappedValue.ext = up }
                     }
-                Text("\(v.sectors) sect").font(.body).frame(width: 88, alignment: .trailing)
-                Text(attrText(v.attributes)).font(.body).frame(width: 50)
+                Text("\(v.sectors) sect").font(.body).frame(width: 76, alignment: .trailing)
+                Text(attrText(v.attributes)).font(.body).frame(width: 44)
                 Text("from \(v.sourceName) · \(v.crc)")
                     .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -703,8 +752,17 @@ struct DiskBrowserPanel: View {
                 openSummary = result.summary
                 openProblems = result.problems
                 openError = result.error
+                keepImageListFocus()
             }
         }
+    }
+
+    /// Loading a disk rebuilds the file list, which can take the keyboard
+    /// focus away from the disk list, so the cursor keys stop working there.
+    /// Put the focus back, unless the user has moved to the file list.
+    private func keepImageListFocus() {
+        guard focusedList != .files else { return }
+        DispatchQueue.main.async { focusedList = .images }
     }
 
     // MARK: Basket
@@ -881,5 +939,5 @@ struct DiskBrowserPanel: View {
 
 #Preview {
     DiskBrowserPanel(onSendToCF: { _ in })
-        .frame(width: 1700, height: 920)
+        .frame(width: 1400, height: 900)
 }

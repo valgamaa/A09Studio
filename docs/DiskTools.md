@@ -132,6 +132,12 @@ between the second and third.
    names and folder names, **and the names of files inside the disks**.
    Disks that match through a file inside them show the matching names
    under the disk name.
+
+   **Wildcards:** `*` matches any run of characters and `?` any single
+   character, e.g. `*.CMD` (all `.CMD` files), `XB?.*`, `CAT*`. A pattern
+   with a wildcard must match the whole file name (`NAME.EXT`), so `*.CMD`
+   finds only names ending in `.CMD`. Without a wildcard the text is matched
+   anywhere in the name. Case is ignored.
 3. Tick **Also filter the file list** to apply the same search to the
    middle panel as well, so selecting a disk shows only the files whose
    names match. A line under the list says how many files are shown. Untick

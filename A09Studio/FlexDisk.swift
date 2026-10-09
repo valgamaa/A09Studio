@@ -112,6 +112,13 @@ struct FlexGeometry: Equatable, Hashable, Identifiable {
 struct FlexImage {
     let geometry: FlexGeometry
     var bytes: [UInt8]
+    /// Sectors actually stored for track 0. Equal to `geometry.spt` for most
+    /// images, but many double-density disks have a single-density first
+    /// track with fewer sectors (10, 15, 20 or 30, say). Some images pad that
+    /// track out to full size (this stays equal to spt, and the directory
+    /// simply ends early); others store it compactly, in which case this is
+    /// smaller and every later track starts that much earlier in the file.
+    var track0Sectors: Int
 
     // SIR field offsets (within track 0, sector 3).
     static let sirSector = 3
@@ -133,6 +140,7 @@ struct FlexImage {
             throw FlexError.badGeometry("tracks 2-256 and 5-255 sectors per track are supported")
         }
         geometry = g
+        track0Sectors = g.spt
         bytes = [UInt8](repeating: 0, count: g.byteCount)
 
         // Boot sectors (T0 S1-S2).
@@ -189,16 +197,26 @@ struct FlexImage {
         }
         // Browsing tolerates images with trailing padding; building does not.
         if lenient && b.count > g.byteCount { b = Array(b[0..<g.byteCount]) }
-        guard b.count == g.byteCount else {
+        // A compact image stores fewer sectors on track 0 than on the others.
+        var firstTrack = g.spt
+        if lenient && b.count < g.byteCount && b.count % 256 == 0 {
+            let candidate = b.count / 256 - g.maxTrack * g.spt
+            if candidate >= 5 && candidate < g.spt { firstTrack = candidate }
+        }
+        guard b.count == (firstTrack + g.maxTrack * g.spt) * 256 else {
             throw FlexError.notAFlexImage("size is \(b.count) bytes but the SIR geometry (\(g.tracks) x \(g.spt)) needs \(g.byteCount)")
         }
         geometry = g
+        track0Sectors = firstTrack
         bytes = b
     }
 
     // MARK: Sector access
 
-    func offset(_ ts: FlexTS) -> Int { geometry.offset(track: ts.track, sector: ts.sector) }
+    func offset(_ ts: FlexTS) -> Int {
+        if ts.track == 0 { return (ts.sector - 1) * 256 }
+        return (track0Sectors + (ts.track - 1) * geometry.spt + (ts.sector - 1)) * 256
+    }
 
     func link(_ ts: FlexTS) -> FlexTS {
         let o = offset(ts)
@@ -341,8 +359,8 @@ enum FlexDirectory {
     static func sectors(in image: FlexImage) -> [FlexTS] {
         var out: [FlexTS] = []
         var ts = FlexTS(track: 0, sector: 5)
-        while !ts.isEnd && out.count <= image.geometry.spt {
-            guard ts.track == 0, ts.sector >= 5, ts.sector <= image.geometry.spt else { break }
+        while !ts.isEnd && out.count <= image.track0Sectors {
+            guard ts.track == 0, ts.sector >= 5, ts.sector <= image.track0Sectors else { break }
             out.append(ts)
             ts = image.link(ts)
         }
@@ -933,12 +951,17 @@ enum FlexVerifier {
 
     /// The checks from the spec's Verification section, with a per-sector
     /// owner map so overlaps show up immediately.
-    static func verify(_ image: FlexImage) -> FlexReport {
+    ///
+    /// `forBrowsing` is for disks that came from elsewhere: record numbers
+    /// that don't count 1, 2, 3… (system files such as ERRORS.SYS often start
+    /// at 0) are reported as warnings instead of errors. Images this app
+    /// builds are always checked strictly.
+    static func verify(_ image: FlexImage, forBrowsing: Bool = false) -> FlexReport {
         var report = FlexReport()
         let g = image.geometry
         var owner: [FlexTS: Owner] = [:]
 
-        if image.bytes.count != g.byteCount {
+        if image.bytes.count != (image.track0Sectors + g.maxTrack * g.spt) * 256 {
             report.errors.append("image size \(image.bytes.count) is not \((g.maxTrack + 1)) x \(g.spt) x 256")
             return report
         }
@@ -949,8 +972,8 @@ enum FlexVerifier {
         var ts = FlexTS(track: 0, sector: 5)
         var dirOK = true
         while true {
-            if ts.track != 0 || ts.sector < 5 || ts.sector > g.spt {
-                report.errors.append("directory chain leaves track 0 / sectors 5-\(g.spt) at T\(ts.track) S\(ts.sector)")
+            if ts.track != 0 || ts.sector < 5 || ts.sector > image.track0Sectors {
+                report.errors.append("directory chain leaves track 0 / sectors 5-\(image.track0Sectors) at T\(ts.track) S\(ts.sector)")
                 dirOK = false
                 break
             }
@@ -961,9 +984,8 @@ enum FlexVerifier {
             if next.isEnd { break }
             ts = next
         }
-        if dirOK, dirSectors.last?.sector != g.spt {
-            report.warnings.append("directory chain ends at sector \(dirSectors.last?.sector ?? 0), not \(g.spt)")
-        }
+        // A directory that ends before the last sector of track 0 is normal on
+        // double-density disks whose first track is single density.
 
         // Live files.
         for entry in FlexDirectory.entries(in: image) {
@@ -998,7 +1020,8 @@ enum FlexVerifier {
                 report.errors.append("\(label): chain ends at a different sector than the directory's end T/S")
             }
             for (i, s) in chain.enumerated() where image.recordNumber(s) != i + 1 {
-                report.errors.append("\(label): record number \(image.recordNumber(s)) at position \(i + 1)")
+                let message = "\(label): record number \(image.recordNumber(s)) at position \(i + 1)"
+                if forBrowsing { report.warnings.append(message) } else { report.errors.append(message) }
                 break
             }
             report.fileSectors += chain.count
@@ -1042,7 +1065,9 @@ enum FlexVerifier {
         // Accounting.
         var orphans = 0
         for t in 0...g.maxTrack {
-            for s in 1...g.spt where owner[FlexTS(track: t, sector: s)] == nil { orphans += 1 }
+            // Track 0 beyond the end of the directory is padding or unused.
+            let top = t == 0 ? (dirSectors.last?.sector ?? image.track0Sectors) : g.spt
+            for s in 1...top where owner[FlexTS(track: t, sector: s)] == nil { orphans += 1 }
         }
         report.orphanedSectors = orphans
         if orphans > 0 { report.warnings.append("\(orphans) orphaned sector(s) belong to no chain") }
