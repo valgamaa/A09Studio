@@ -16,6 +16,19 @@ struct DiskBuilderPanel: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    // MARK: Text size
+
+    /// Scale for this panel's text and column widths. 1.0 = standard macOS
+    /// sizes; 2.0 doubles them. Change this one value to adjust.
+    static let scale: CGFloat = 2.0
+
+    /// A system font at `base` standard points, scaled.
+    private static func F(_ base: CGFloat, _ weight: Font.Weight = .regular, mono: Bool = false) -> Font {
+        .system(size: base * scale, weight: weight, design: mono ? .monospaced : .default)
+    }
+    /// A width or height in standard points, scaled.
+    private static func W(_ x: CGFloat) -> CGFloat { x * scale }
+
     // MARK: Image source
 
     private enum ImageMode: String, CaseIterable, Identifiable {
@@ -35,6 +48,12 @@ struct DiskBuilderPanel: View {
 
     @State private var baseURL: URL?
     @State private var baseImage: FlexImage?
+    /// True once files have been deleted from `baseImage` in memory.
+    @State private var imageModified = false
+    /// Queued files whose name matches a file on the disk replace it.
+    @State private var replaceExisting = true
+    @State private var pendingDelete: FlexDirEntry?
+    @State private var showProtectedConfirm = false
 
     // MARK: Files and results
 
@@ -74,36 +93,78 @@ struct DiskBuilderPanel: View {
         return FlexGeometry.presets.first { $0.name == presetID }
     }
 
+    private static func key(_ name: String, _ ext: String) -> String { "\(name.uppercased()).\(ext.uppercased())" }
+
+    /// Live directory entries of the opened image.
+    private var diskEntries: [FlexDirEntry] {
+        guard mode == .existing, let img = baseImage else { return [] }
+        return FlexDirectory.entries(in: img)
+    }
+
+    /// The disk file a queued file would clash with, if any.
+    private func clash(_ f: BuilderFile) -> FlexDirEntry? {
+        let k = Self.key(f.name, f.ext)
+        return diskEntries.first { Self.key($0.name, $0.ext) == k }
+    }
+
+    /// True when a clash can be resolved by replacing the disk file.
+    private func canReplace(_ e: FlexDirEntry) -> Bool { replaceExisting && e.attributes & 0xC0 == 0 }
+
+    /// Queued files that will actually be written.
+    private var validFiles: [BuilderFile] {
+        files.filter { f in
+            guard f.error == nil, f.nameProblem == nil else { return false }
+            if let e = clash(f) { return canReplace(e) }
+            return true
+        }
+    }
+
+    /// Disk files that will be replaced, freeing their sectors and slots.
+    private var replacedEntries: [FlexDirEntry] {
+        let queued = Set(validFiles.map { Self.key($0.name, $0.ext) })
+        return diskEntries.filter { queued.contains(Self.key($0.name, $0.ext)) }
+    }
+
     private var freeSectors: Int {
-        if mode == .existing { return baseImage?.freeCount ?? 0 }
+        if mode == .existing {
+            return (baseImage?.freeCount ?? 0) + replacedEntries.reduce(0) { $0 + $1.sectorCount }
+        }
         return geometry?.blankFreeSectors ?? 0
     }
 
     private var freeSlots: Int {
-        if mode == .existing, let img = baseImage { return FlexDirectory.freeSlotCount(in: img) }
+        if mode == .existing, let img = baseImage {
+            return FlexDirectory.freeSlotCount(in: img) + replacedEntries.count
+        }
         return geometry?.directorySlots ?? 0
     }
 
-    private var queuedSectors: Int { files.filter { $0.error == nil && $0.nameProblem == nil }.reduce(0) { $0 + $1.sectors } }
-    private var queuedFiles: Int { files.filter { $0.error == nil && $0.nameProblem == nil }.count }
+    private var queuedSectors: Int { validFiles.reduce(0) { $0 + $1.sectors } }
+    private var queuedFiles: Int { validFiles.count }
 
     private var canBuild: Bool {
-        guard geometry != nil, queuedFiles > 0 else { return false }
+        guard geometry != nil else { return false }
         if mode == .existing && baseImage == nil { return false }
+        guard queuedFiles > 0 || (mode == .existing && imageModified) else { return false }
         return queuedSectors <= freeSectors && queuedFiles <= freeSlots
     }
 
     // MARK: View
 
     var body: some View {
+        ScrollView(.vertical) {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Disk Builder → FLEX .dsk").font(.headline)
+                Text("Disk Builder → FLEX .dsk").font(Self.F(15, .bold))
                 Spacer()
                 Button("Close") { dismiss() }
             }
 
             imageSection
+            if mode == .existing, baseImage != nil {
+                Divider()
+                diskFilesSection
+            }
             Divider()
             fileSection
             capacitySection
@@ -120,22 +181,31 @@ struct DiskBuilderPanel: View {
             if !statusMessage.isEmpty {
                 Text(statusMessage)
                     .foregroundStyle(lastActionFailed ? .red : .green)
-                    .font(.callout)
+                    .font(Self.F(12))
             }
 
             GroupBox("Log") {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(log.enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.system(.caption, design: .monospaced))
+                            Text(line).font(Self.F(10, mono: true)).textSelection(.enabled)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(minHeight: 110)
+                .frame(minHeight: Self.W(110), maxHeight: Self.W(160))
             }
         }
         .padding()
+        }
+        .font(Self.F(13))
+        .controlSize(.large)
+        .alert("Delete protected file?", isPresented: $showProtectedConfirm, presenting: pendingDelete) { e in
+            Button("Delete", role: .destructive) { performDelete(e, force: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: { e in
+            Text("\(e.fullName) is marked \(attrText(e.attributes)). Delete it anyway?")
+        }
         .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -153,7 +223,7 @@ struct DiskBuilderPanel: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 360)
+            .frame(maxWidth: Self.W(360))
 
             if mode == .new {
                 HStack {
@@ -165,36 +235,36 @@ struct DiskBuilderPanel: View {
                         Text("Custom…").tag(Self.customID)
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 330)
+                    .frame(maxWidth: Self.W(330))
                 }
                 if presetID == Self.customID {
                     HStack {
                         Text("Tracks:")
                         TextField("", value: $customTracks, formatter: NumberFormatter())
-                            .frame(width: 60).textFieldStyle(.roundedBorder)
+                            .frame(width: Self.W(60)).textFieldStyle(.roundedBorder)
                         Text("Sectors/track:")
                         TextField("", value: $customSpt, formatter: NumberFormatter())
-                            .frame(width: 60).textFieldStyle(.roundedBorder)
+                            .frame(width: Self.W(60)).textFieldStyle(.roundedBorder)
                         if geometry == nil {
                             Label("tracks 2–256, sectors/track 5–255", systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.orange).font(.caption)
+                                .foregroundStyle(.orange).font(Self.F(10))
                         }
                     }
                 }
                 HStack {
                     Text("Volume label:")
                     TextField("", text: $volumeLabel)
-                        .frame(width: 110).textFieldStyle(.roundedBorder)
+                        .frame(width: Self.W(110)).textFieldStyle(.roundedBorder)
                     Text("Volume number:")
                     TextField("", value: $volumeNumber, formatter: NumberFormatter())
-                        .frame(width: 60).textFieldStyle(.roundedBorder)
+                        .frame(width: Self.W(60)).textFieldStyle(.roundedBorder)
                 }
                 if let g = geometry {
                     Text("\(g.tracks) tracks × \(g.spt) sectors – \(g.sizeDescription), \(g.blankFreeSectors) free sectors, \(g.directorySlots) directory slots")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(Self.F(10)).foregroundStyle(.secondary)
                     if g.byteCount > 4_000_000 {
                         Text("Cloning this size over serial is slow; a smaller geometry is much quicker if your files fit.")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(Self.F(10)).foregroundStyle(.orange)
                     }
                 }
             } else {
@@ -202,12 +272,67 @@ struct DiskBuilderPanel: View {
                     Text(baseURL?.lastPathComponent ?? "(no image selected)")
                         .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     Spacer()
+                    Button("Revert") { if let u = baseURL { loadExisting(u) } }
+                        .disabled(!imageModified)
                     Button("Choose…") { chooseExistingImage() }
                 }
                 if let img = baseImage {
-                    Text("\(img.geometry.tracks) tracks × \(img.geometry.spt) sectors, volume \(img.label.isEmpty ? "(none)" : img.label), \(FlexDirectory.entries(in: img).count) file(s), \(img.freeCount) free sectors – verified OK")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text("\(img.geometry.tracks) tracks × \(img.geometry.spt) sectors, volume \(img.label.isEmpty ? "(none)" : img.label), \(FlexDirectory.entries(in: img).count) file(s), \(img.freeCount) free sectors" + (imageModified ? " – changed, not saved yet" : " – verified OK"))
+                        .font(Self.F(10)).foregroundStyle(imageModified ? Color.orange : Color.secondary)
                 }
+            }
+        }
+    }
+
+    private var diskFilesSection: some View {
+        let replacing = Set(replacedEntries.map { Self.key($0.name, $0.ext) })
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Files on disk").font(Self.F(11, .bold))
+                Text("(\(diskEntries.count))").font(Self.F(10)).foregroundStyle(.secondary)
+                Spacer()
+                Toggle("Replace files with the same name", isOn: $replaceExisting)
+            }
+            if diskEntries.isEmpty {
+                Text("The disk has no files.")
+                    .font(Self.F(12)).foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 6) {
+                    Text("Name").frame(width: Self.W(120), alignment: .leading)
+                    Text("Sectors").frame(width: Self.W(55), alignment: .trailing)
+                    Text("Attr").frame(width: Self.W(44), alignment: .leading)
+                    Text("Date").frame(width: Self.W(70), alignment: .leading)
+                    Text("Start").frame(width: Self.W(70), alignment: .leading)
+                    Spacer()
+                }
+                .font(Self.F(10)).foregroundStyle(.secondary)
+
+                List {
+                    ForEach(diskEntries, id: \.fullName) { e in
+                        HStack(spacing: 6) {
+                            Text(e.fullName).font(Self.F(13, mono: true))
+                                .frame(width: Self.W(120), alignment: .leading)
+                            Text("\(e.sectorCount)").frame(width: Self.W(55), alignment: .trailing)
+                            Text(attrText(e.attributes)).frame(width: Self.W(44), alignment: .leading)
+                            Text(String(format: "%02d-%02d-%02d", e.date.month, e.date.day, e.date.year))
+                                .frame(width: Self.W(70), alignment: .leading)
+                            Text(String(format: "T%02X S%02X", e.start.track, e.start.sector))
+                                .font(Self.F(12, mono: true))
+                                .frame(width: Self.W(70), alignment: .leading)
+                            if replacing.contains(Self.key(e.name, e.ext)) {
+                                Text("will be replaced").font(Self.F(10)).foregroundStyle(.orange)
+                            }
+                            if e.random {
+                                Text("random").font(Self.F(10)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button { requestDelete(e) } label: { Image(systemName: "trash") }
+                                .buttonStyle(.borderless)
+                                .help("Delete \(e.fullName) from the image")
+                        }
+                    }
+                }
+                .frame(minHeight: Self.W(100), maxHeight: Self.W(200))
             }
         }
     }
@@ -215,8 +340,8 @@ struct DiskBuilderPanel: View {
     private var fileSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Files").font(.subheadline.bold())
-                Text("(drop files or a folder here)").font(.caption).foregroundStyle(.secondary)
+                Text("Files to add").font(Self.F(11, .bold))
+                Text("(drop files or a folder here)").font(Self.F(10)).foregroundStyle(.secondary)
                 Spacer()
                 Button("Add Files…") { chooseHostFiles() }
                 Button("Add Assembled Output") { addAssembled() }
@@ -227,25 +352,25 @@ struct DiskBuilderPanel: View {
 
             if files.isEmpty {
                 Text("No files yet.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 60)
+                    .font(Self.F(12)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: Self.W(60))
             } else {
                 HStack(spacing: 6) {
-                    Text("Name").frame(width: 90, alignment: .leading)
-                    Text("Ext").frame(width: 44, alignment: .leading)
-                    Text("Type").frame(width: 130, alignment: .leading)
-                    Text("Sectors").frame(width: 55, alignment: .trailing)
-                    Text("Attr").frame(width: 50, alignment: .leading)
+                    Text("Name").frame(width: Self.W(90), alignment: .leading)
+                    Text("Ext").frame(width: Self.W(44), alignment: .leading)
+                    Text("Type").frame(width: Self.W(130), alignment: .leading)
+                    Text("Sectors").frame(width: Self.W(55), alignment: .trailing)
+                    Text("Attr").frame(width: Self.W(50), alignment: .leading)
                     Text("Notes").frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Self.F(10)).foregroundStyle(.secondary)
 
                 List {
                     ForEach($files) { $file in
                         fileRow($file)
                     }
                 }
-                .frame(minHeight: 120, maxHeight: 220)
+                .frame(minHeight: Self.W(120), maxHeight: Self.W(220))
             }
         }
     }
@@ -253,13 +378,13 @@ struct DiskBuilderPanel: View {
     private func fileRow(_ file: Binding<BuilderFile>) -> some View {
         HStack(spacing: 6) {
             TextField("", text: file.name)
-                .textFieldStyle(.roundedBorder).frame(width: 90)
+                .textFieldStyle(.roundedBorder).frame(width: Self.W(90))
                 .onChange(of: file.wrappedValue.name) { new in
                     let up = new.uppercased()
                     if up != new { file.wrappedValue.name = up }
                 }
             TextField("", text: file.ext)
-                .textFieldStyle(.roundedBorder).frame(width: 44)
+                .textFieldStyle(.roundedBorder).frame(width: Self.W(44))
                 .onChange(of: file.wrappedValue.ext) { new in
                     let up = new.uppercased()
                     if up != new { file.wrappedValue.ext = up }
@@ -267,10 +392,10 @@ struct DiskBuilderPanel: View {
             Picker("", selection: file.kind) {
                 ForEach(FlexFileKind.allCases) { Text($0.rawValue).tag($0) }
             }
-            .labelsHidden().frame(width: 130)
+            .labelsHidden().frame(width: Self.W(130))
             .onChange(of: file.wrappedValue.kind) { _ in recompute(file.wrappedValue.id) }
 
-            Text("\(file.wrappedValue.sectors)").frame(width: 55, alignment: .trailing)
+            Text("\(file.wrappedValue.sectors)").frame(width: Self.W(55), alignment: .trailing)
 
             Menu {
                 Toggle("Write protect (W)", isOn: attrBinding(file, 0x80))
@@ -280,25 +405,33 @@ struct DiskBuilderPanel: View {
             } label: {
                 Text(attrText(file.wrappedValue.attributes))
             }
-            .frame(width: 50)
+            .frame(width: Self.W(50))
 
             VStack(alignment: .leading, spacing: 1) {
                 if let problem = file.wrappedValue.nameProblem {
                     Text(problem).foregroundStyle(.red)
                 } else if let error = file.wrappedValue.error {
                     Text(error).foregroundStyle(.red)
+                } else if let e = clash(file.wrappedValue) {
+                    if canReplace(e) {
+                        Text("replaces \(e.fullName) on the disk").foregroundStyle(.orange)
+                    } else if e.attributes & 0xC0 != 0 {
+                        Text("\(e.fullName) on the disk is protected – delete it above first").foregroundStyle(.red)
+                    } else {
+                        Text("\(e.fullName) already on the disk – turn on Replace").foregroundStyle(.red)
+                    }
                 }
                 if file.wrappedValue.kind == .srecord, !file.wrappedValue.hostHasStart {
                     HStack(spacing: 4) {
-                        Text("Start $").font(.caption)
+                        Text("Start $")
                         TextField("hex", text: file.startText)
-                            .textFieldStyle(.roundedBorder).frame(width: 60)
+                            .textFieldStyle(.roundedBorder).frame(width: Self.W(60))
                             .onChange(of: file.wrappedValue.startText) { _ in recompute(file.wrappedValue.id) }
                     }
                 }
                 ForEach(file.wrappedValue.messages, id: \.self) { Text($0).foregroundStyle(.orange) }
             }
-            .font(.caption)
+            .font(Self.F(10))
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
@@ -317,7 +450,7 @@ struct DiskBuilderPanel: View {
                 ProgressView(value: min(1.0, Double(queuedSectors) / Double(freeSectors)))
             }
             Text("\(queuedFiles) file(s), \(queuedSectors) sectors queued – \(sectorsAfter) of \(freeSectors) free sectors and \(slotsAfter) of \(freeSlots) directory slots left after build")
-                .font(.caption)
+                .font(Self.F(10))
                 .foregroundStyle(bad ? Color.red : Color.secondary)
         }
     }
@@ -434,6 +567,13 @@ struct DiskBuilderPanel: View {
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.data]
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadExisting(url)
+    }
+
+    /// Loads (or reloads, for Revert) an image, discarding in-memory deletes.
+    private func loadExisting(_ url: URL) {
+        imageModified = false
+        lastActionFailed = false
         do {
             let data = try Data(contentsOf: url)
             let image = try FlexImage(data: data)
@@ -449,6 +589,7 @@ struct DiskBuilderPanel: View {
             baseImage = image
             baseURL = url
             statusMessage = ""
+            builtURL = nil
             appendLog("Opened \(url.lastPathComponent): \(image.geometry.tracks) × \(image.geometry.spt), \(report.fileCount) file(s), \(report.freeSectors) free sectors.")
             report.warnings.forEach { appendLog("warning: \($0)") }
         } catch {
@@ -456,6 +597,31 @@ struct DiskBuilderPanel: View {
             baseURL = url
             statusMessage = error.localizedDescription
             lastActionFailed = true
+        }
+    }
+
+    private func requestDelete(_ e: FlexDirEntry) {
+        if e.attributes & 0xC0 != 0 {
+            pendingDelete = e
+            showProtectedConfirm = true
+        } else {
+            performDelete(e, force: false)
+        }
+    }
+
+    /// Deletes in memory only; the original .dsk is untouched until Build saves.
+    private func performDelete(_ e: FlexDirEntry, force: Bool) {
+        guard var img = baseImage else { return }
+        do {
+            let freed = try FlexAllocator.deleteFile(from: &img, name: e.name, ext: e.ext, ignoreProtection: force)
+            baseImage = img
+            imageModified = true
+            builtURL = nil
+            lastActionFailed = false
+            statusMessage = "Deleted \(e.fullName) – press Build to save the changed image."
+            appendLog("Deleted \(e.fullName) (\(freed) sectors freed, not saved yet)")
+        } catch {
+            fail("Could not delete \(e.fullName): \(error.localizedDescription)")
         }
     }
 
@@ -482,12 +648,25 @@ struct DiskBuilderPanel: View {
 
         appendLog("--- Building ---")
         var added = 0
+        var addedKeys = Set<String>()
         for f in files {
             if let p = f.nameProblem { appendLog("Skipped \(f.hostName): \(p)"); continue }
             if let e = f.error { appendLog("Skipped \(f.hostName): \(e)"); continue }
+            let k = Self.key(f.name, f.ext)
+            let shown = f.ext.isEmpty ? f.name.uppercased() : k
+            if addedKeys.contains(k) { appendLog("Skipped \(f.hostName): \(shown) is queued twice"); continue }
             do {
-                let w = try FlexAllocator.addFile(to: &image, name: f.name, ext: f.ext, stream: f.stream,
+                // Work on a copy so a failed add never loses the file it replaces.
+                var trial = image
+                if mode == .existing, FlexDirectory.contains(name: f.name, ext: f.ext, in: trial) {
+                    guard replaceExisting else { throw FlexError.duplicateName(shown) }
+                    let freed = try FlexAllocator.deleteFile(from: &trial, name: f.name, ext: f.ext)
+                    appendLog("Replacing \(shown) (\(freed) old sectors freed)")
+                }
+                let w = try FlexAllocator.addFile(to: &trial, name: f.name, ext: f.ext, stream: f.stream,
                                                   attributes: f.attributes, date: .today)
+                image = trial
+                addedKeys.insert(k)
                 added += 1
                 appendLog("Added \(f.name).\(f.ext) (\(f.sectors) sectors)")
                 f.messages.forEach { appendLog("  note: \($0)") }
@@ -496,7 +675,8 @@ struct DiskBuilderPanel: View {
                 appendLog("Skipped \(f.hostName): \(error.localizedDescription)")
             }
         }
-        guard added > 0 else { fail("Nothing was added."); return }
+        let changedOnly = mode == .existing && imageModified
+        guard added > 0 || changedOnly else { fail("Nothing was added."); return }
 
         let report = FlexVerifier.verify(image)
         report.warnings.forEach { appendLog("warning: \($0)") }
@@ -521,8 +701,15 @@ struct DiskBuilderPanel: View {
         do {
             try image.data.write(to: url)
             builtURL = url
-            statusMessage = "Saved \(url.lastPathComponent): \(added) file(s), \(image.freeCount) free sectors left."
+            statusMessage = "Saved \(url.lastPathComponent): \(added) file(s) added, \(image.freeCount) free sectors left."
             appendLog("Saved \(url.path) (\(image.bytes.count) bytes). Verified OK.")
+            if mode == .existing {
+                // Carry on from the saved image so the list shows what is on it now.
+                baseImage = image
+                baseURL = url
+                imageModified = false
+                files.removeAll()
+            }
         } catch {
             fail("Could not save: \(error.localizedDescription)")
         }
@@ -573,5 +760,5 @@ struct DiskBuilderPanel: View {
 
 #Preview {
     DiskBuilderPanel(assembledSRecord: nil, assembledName: nil, onSendToCF: { _ in })
-        .frame(width: 820, height: 700)
+        .frame(width: 1600, height: 1300)
 }

@@ -5,7 +5,7 @@ getting them onto the 6809 board's CF card. All three open from the toolbar:
 
 | Toolbar button | What it is for |
 |---|---|
-| **Disk Builder…** | Make a new FLEX disk image from host files, or add files to an existing image |
+| **Disk Builder…** | Make a new FLEX disk image from host files, or add, replace and delete files on an existing image |
 | **DSK Browser…** | Look through a folder full of disk images, find files, and copy chosen ones out |
 | **Disk Image…** | Send a finished `.dsk` to the CF card on the board over the serial link |
 
@@ -65,6 +65,17 @@ The first control picks the mode:
 - **Open existing .dsk** — click **Choose…** to pick an image. The app
   checks it and shows its geometry, label, file count and free sectors.
   Files are added to this image.
+  - **Files on disk** lists every file on the image with its sectors,
+    attributes, date and start track/sector.
+  - The trash button deletes a file, returning its sectors to the free
+    chain as FLEX's DELETE does. Write- or delete-protected files ask
+    for confirmation first.
+  - Deletes happen in memory only: the original `.dsk` is unchanged until
+    **Build .dsk…** saves the new image. **Revert** reloads it from disk.
+  - With **Replace files with the same name** on (the default), a queued
+    file whose name is already on the disk replaces it. Protected files
+    must be deleted from the list first.
+  - After saving, the list shows the saved image.
 
 ### Add files
 

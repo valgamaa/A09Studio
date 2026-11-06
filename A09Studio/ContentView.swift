@@ -81,7 +81,8 @@ struct ContentView: View {
                     showDiskBuilder = false
                     DispatchQueue.main.async { showDiskImage = true }
                 })
-                .frame(width: 820, height: 700)
+                .frame(width: min(1600, (NSScreen.main?.visibleFrame.width ?? 1500) - 60),
+                       height: min(1300, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
         }
     }
 

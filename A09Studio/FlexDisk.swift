@@ -45,6 +45,8 @@ enum FlexError: LocalizedError {
     case invalidName(String)
     case conversion(String)
     case needsTransferAddress
+    case fileNotFound(String)
+    case fileProtected(String)
 
     var errorDescription: String? {
         switch self {
@@ -57,6 +59,8 @@ enum FlexError: LocalizedError {
         case .invalidName(let m): return "Invalid FLEX name: \(m)"
         case .conversion(let m): return "Conversion failed: \(m)"
         case .needsTransferAddress: return "S-record has no start address; enter one"
+        case .fileNotFound(let n): return "\(n) is not on the disk"
+        case .fileProtected(let n): return "\(n) is write- or delete-protected"
         }
     }
 }
@@ -931,6 +935,66 @@ enum FlexAllocator {
 
         image = work
         return warnings
+    }
+}
+
+// MARK: - Deleting files
+
+extension FlexDirectory {
+    /// Marks an entry deleted the way FLEX's DELETE does: first name byte = $FF.
+    static func markDeleted(in image: inout FlexImage, sector: FlexTS, slot: Int) {
+        image.bytes[entryBase(image, sector, slot)] = 0xFF
+    }
+}
+
+extension FlexAllocator {
+    /// Deletes a file the way FLEX does: its sector chain is appended to the
+    /// end of the free chain and its directory entry is marked deleted.
+    /// Record numbers in the freed sectors are zeroed to match a fresh format.
+    /// Works on a copy and only commits on success. Returns sectors freed.
+    @discardableResult
+    static func deleteFile(from image: inout FlexImage, name: String, ext: String,
+                           ignoreProtection: Bool = false) throws -> Int {
+        let n = name.uppercased(), e = ext.uppercased()
+        let shown = e.isEmpty ? n : "\(n).\(e)"
+        guard let entry = FlexDirectory.entries(in: image).first(where: {
+            $0.name.uppercased() == n && $0.ext.uppercased() == e
+        }) else { throw FlexError.fileNotFound(shown) }
+        if !ignoreProtection && entry.attributes & 0xC0 != 0 { throw FlexError.fileProtected(shown) }
+
+        var work = image
+        let g = work.geometry
+        var chain: [FlexTS] = []
+        var cur = entry.start
+        while !cur.isEnd {
+            guard g.contains(cur), cur.track >= 1 else {
+                throw FlexError.imageDamaged("\(shown): chain leaves the disk at T\(cur.track) S\(cur.sector)")
+            }
+            guard chain.count < g.totalSectors else { throw FlexError.imageDamaged("\(shown): chain loops") }
+            chain.append(cur)
+            cur = work.link(cur)
+        }
+        guard let last = chain.last, last == entry.end else {
+            throw FlexError.imageDamaged("\(shown): chain does not end at the directory's end sector")
+        }
+
+        for ts in chain {
+            let o = work.offset(ts)
+            work.bytes[o + 2] = 0
+            work.bytes[o + 3] = 0
+        }
+        // The file's last sector already links 00 00, so it becomes the new end.
+        if work.freeCount == 0 || work.firstFree.isEnd {
+            work.firstFree = entry.start
+        } else {
+            work.setLink(work.lastFree, to: entry.start)
+        }
+        work.lastFree = last
+        work.freeCount = work.freeCount + chain.count
+        FlexDirectory.markDeleted(in: &work, sector: entry.dirSector, slot: entry.slot)
+
+        image = work
+        return chain.count
     }
 }
 
